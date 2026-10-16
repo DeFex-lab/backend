@@ -89,16 +89,33 @@ export class SponsorsService {
    * bounty-funded escrows and depended on the parent Bounty row surviving;
    * this reads `Escrow.status`/`Escrow.sponsorId` directly, so it covers
    * milestone-funded escrows too and remains correct even if the parent
-   * bounty/milestone is later deleted (#27).
+   * bounty/milestone is later deleted (#27). Confirmed partial payouts are
+   * subtracted per escrow, so only the still-unpaid remainder counts (#575).
    */
   async budgetLocked(sponsorId: string): Promise<number> {
-    const row = await this.escrowRepo
+    // A milestone escrow stays LOCKED while releasePartial pays issues out of
+    // it, so its full `amount` is not all still locked: subtract what it has
+    // already paid (#575). Otherwise a 1,000 USDC escrow with 900 paid shows
+    // 1,000 locked and that 900 is double-counted with totalSpend. Grouped per
+    // escrow so the payment join can't multiply escrow amounts.
+    const rows = await this.escrowRepo
       .createQueryBuilder('escrow')
-      .select('COALESCE(SUM(escrow.amount), 0)', 'total')
+      .leftJoin('escrow.payments', 'payment', 'payment.status = :confirmed', {
+        confirmed: PaymentStatus.CONFIRMED,
+      })
+      .select('escrow.id', 'id')
+      .addSelect('escrow.amount', 'amount')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'paid')
       .where('escrow.sponsorId = :sponsorId', { sponsorId })
       .andWhere('escrow.status = :status', { status: EscrowStatus.LOCKED })
-      .getRawOne<{ total: string }>();
-    return Number(row?.total ?? 0);
+      .groupBy('escrow.id')
+      .addGroupBy('escrow.amount')
+      .getRawMany<{ id: string; amount: string; paid: string }>();
+
+    return rows.reduce(
+      (sum, r) => sum + Math.max(Number(r.amount) - Number(r.paid), 0),
+      0,
+    );
   }
 
   async activeMilestones(
