@@ -39,19 +39,25 @@ export class SponsorsService {
     sponsorId: string,
     options: SponsorDashboardOptions = {},
   ): Promise<Bounty[]> {
-    return this.bountyRepo
-      .createQueryBuilder('bounty')
-      .where('bounty.sponsorId = :sponsorId', { sponsorId })
-      .andWhere('bounty.status NOT IN (:...terminal)', {
-        terminal: [
-          BountyStatus.PAID,
-          BountyStatus.REFUNDED,
-          BountyStatus.EXPIRED,
-        ],
-      })
-      .take(options.limit ?? 20)
-      .skip(options.offset ?? 0)
-      .getMany();
+    return (
+      this.bountyRepo
+        .createQueryBuilder('bounty')
+        .where('bounty.sponsorId = :sponsorId', { sponsorId })
+        .andWhere('bounty.status NOT IN (:...terminal)', {
+          terminal: [
+            BountyStatus.PAID,
+            BountyStatus.REFUNDED,
+            BountyStatus.EXPIRED,
+          ],
+        })
+        // Postgres has no row order without ORDER BY, so offset pages could
+        // repeat or skip rows; id breaks createdAt ties (#279, #464, #573).
+        .orderBy('bounty.createdAt', 'DESC')
+        .addOrderBy('bounty.id', 'DESC')
+        .take(options.limit ?? 20)
+        .skip(options.offset ?? 0)
+        .getMany()
+    );
   }
 
   /**
@@ -104,6 +110,8 @@ export class SponsorsService {
         { sponsorId, status: MilestoneStatus.FUNDED },
         { sponsorId, status: MilestoneStatus.IN_PROGRESS },
       ],
+      // Stable order for offset pagination (#573).
+      order: { createdAt: 'DESC', id: 'DESC' },
       take: options.limit ?? 20,
       skip: options.offset ?? 0,
     });
@@ -116,6 +124,8 @@ export class SponsorsService {
   ): Promise<Array<{ milestoneId: string; title: string; progress: number }>> {
     const milestones = await this.milestoneRepo.find({
       where: { sponsorId },
+      // Stable order for offset pagination (#573).
+      order: { createdAt: 'DESC', id: 'DESC' },
       take: options.limit ?? 20,
       skip: options.offset ?? 0,
     });
@@ -149,6 +159,8 @@ export class SponsorsService {
       .innerJoin('payment.escrow', 'escrow')
       .where('escrow.sponsorId = :sponsorId', { sponsorId })
       .orderBy('payment.createdAt', 'DESC')
+      // Tie-break equal timestamps so pages stay stable (#573).
+      .addOrderBy('payment.id', 'DESC')
       .take(options.limit ?? 20)
       .skip(options.offset ?? 0)
       .getMany();
