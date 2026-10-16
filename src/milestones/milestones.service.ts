@@ -181,12 +181,36 @@ export class MilestonesService {
       );
     }
 
-    const unresolvedCount = openIssues.length;
-    const remainingBudget =
-      Number(milestone.budget) - Number(milestone.distributed);
-    const share = Math.min(remainingBudget / unresolvedCount, remainingBudget);
-
     return this.dataSource.transaction(async (mgr) => {
+      // Lock the milestone row and re-read `distributed` and the open issues
+      // under that lock (#531). Reading them before the transaction let two
+      // concurrent resolutions for different issues both start from the same
+      // `distributed`, so the second write lost the first share while the
+      // Payment ledger recorded both. releasePartial only locks the escrow.
+      const locked = await mgr.findOne(Milestone, {
+        where: { id: milestoneId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked) {
+        throw new NotFoundException(`Milestone ${milestoneId} not found`);
+      }
+      const lockedOpen = (
+        await mgr.find(Issue, { where: { milestoneId } })
+      ).filter((i) => i.state === IssueState.OPEN);
+      if (!lockedOpen.some((i) => i.id === issueId)) {
+        throw new BadRequestException(
+          `Issue ${issueId} has already been resolved for milestone ${milestoneId}`,
+        );
+      }
+
+      const unresolvedCount = lockedOpen.length;
+      const remainingBudget =
+        Number(locked.budget) - Number(locked.distributed);
+      const share = Math.min(
+        remainingBudget / unresolvedCount,
+        remainingBudget,
+      );
+
       const payment = await this.escrowService.releasePartial(
         milestone.escrowId!,
         share.toFixed(7),
@@ -195,9 +219,9 @@ export class MilestonesService {
         mgr,
       );
 
-      const newDistributed = (Number(milestone.distributed) + share).toFixed(7);
+      const newDistributed = (Number(locked.distributed) + share).toFixed(7);
       const newStatus =
-        Number(newDistributed) >= Number(milestone.budget) - 1e-7
+        Number(newDistributed) >= Number(locked.budget) - 1e-7
           ? MilestoneStatus.COMPLETED
           : MilestoneStatus.IN_PROGRESS;
       await mgr.update(Milestone, milestoneId, {
