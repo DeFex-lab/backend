@@ -6,6 +6,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   NestInterceptor,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -52,6 +53,9 @@ export const STALE_PROCESSING_MS = 180 * 1000;
 
 /** Postgres SQLSTATE for unique_violation. */
 const PG_UNIQUE_VIOLATION = '23505';
+
+/** Attempts to record a successful outcome before giving up (#546). */
+const COMPLETE_WRITE_ATTEMPTS = 2;
 
 function isUniqueViolation(error: unknown): boolean {
   const driverError = (error as { driverError?: { code?: string } } | null)
@@ -144,6 +148,8 @@ interface CachedOutcome {
  */
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
+  private readonly logger = new Logger(IdempotencyInterceptor.name);
+
   constructor(
     @InjectRepository(IdempotencyKey)
     private readonly repo: Repository<IdempotencyKey>,
@@ -204,8 +210,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       mergeMap((data: unknown) =>
+        // completeAfterSuccess never rejects: once the handler has succeeded
+        // (funds may already have moved on-chain), a failed bookkeeping write
+        // must not reach catchError → settleFailure, which would delete the
+        // key and let a retry run the operation again (#321, #546).
         from(
-          this.complete(identity, {
+          this.completeAfterSuccess(identity, {
             responseStatus: httpStatusCode,
             responseBody: (data ?? null) as JsonValue,
           }),
@@ -335,6 +345,33 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return null;
     }
     return this.resolveExisting(current, identity, fingerprint);
+  }
+
+  /**
+   * Records a successful handler outcome. Retries the write once; if it still
+   * fails, logs and leaves the row PROCESSING. A retry with the same key then
+   * gets 409 until the row goes stale instead of re-executing, and this
+   * request still returns the handler's real response (#546).
+   */
+  private async completeAfterSuccess(
+    identity: KeyIdentity,
+    outcome: CachedOutcome,
+  ): Promise<void> {
+    for (let attempt = 1; attempt <= COMPLETE_WRITE_ATTEMPTS; attempt++) {
+      try {
+        await this.complete(identity, outcome);
+        return;
+      } catch (error) {
+        if (attempt === COMPLETE_WRITE_ATTEMPTS) {
+          this.logger.error(
+            `Handler succeeded but recording the COMPLETED idempotency key failed ` +
+              `(scope=${identity.scope}); keeping it PROCESSING so a retry is rejected ` +
+              `rather than re-executed`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      }
+    }
   }
 
   private async complete(
