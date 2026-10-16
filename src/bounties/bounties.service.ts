@@ -232,13 +232,28 @@ export class BountiesService {
   }
 
   /** Sponsor (or admin/expiry job) reclaims escrowed funds. */
+  /**
+   * Refunds a bounty to its funder. Allowed for the bounty's sponsor and for
+   * the maintainer of the repository the bounty's issue belongs to, e.g. to
+   * unwind an abandoned bounty (#545). The route admits SPONSOR and
+   * MAINTAINER, but a maintainer of some *other* repository is still
+   * rejected. Safe to open up: escrow refunds always pay the original funder,
+   * never the caller.
+   */
   async refund(id: string, callerUserId: string): Promise<Bounty> {
-    const bounty = await this.findOne(id);
+    const bounty = await this.bountyRepo.findOne({
+      where: { id },
+      relations: { issue: { repository: true } },
+    });
+    if (!bounty) throw new NotFoundException(`Bounty ${id} not found`);
 
-    // Verify caller is the sponsor
-    if (bounty.sponsorId !== callerUserId) {
+    const isSponsor = bounty.sponsorId === callerUserId;
+    const isRepoMaintainer =
+      !!bounty.issue?.repository?.maintainerId &&
+      bounty.issue.repository.maintainerId === callerUserId;
+    if (!isSponsor && !isRepoMaintainer) {
       throw new ForbiddenException(
-        'Only the bounty sponsor can refund this bounty',
+        "Only the bounty sponsor or the repository's maintainer can refund this bounty",
       );
     }
 
