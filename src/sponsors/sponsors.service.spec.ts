@@ -21,6 +21,7 @@ function createMockQueryBuilder(result: { raw?: unknown; many?: unknown[] }) {
     andWhere: jest.fn().mockReturnThis(),
     innerJoin: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
     take: jest.fn().mockReturnThis(),
     skip: jest.fn().mockReturnThis(),
     getRawOne: jest.fn().mockResolvedValue(result.raw),
@@ -252,6 +253,32 @@ describe('SponsorsService', () => {
           progress: 0,
         },
       ]);
+    });
+  });
+
+  describe('pagination order (#573)', () => {
+    it('activeBounties orders by createdAt DESC, id DESC before paginating', async () => {
+      const qb = createMockQueryBuilder({ many: [] });
+      bountyRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.activeBounties('sponsor-1', { limit: 10, offset: 10 });
+
+      expect(qb.orderBy).toHaveBeenCalledWith('bounty.createdAt', 'DESC');
+      expect(qb.addOrderBy).toHaveBeenCalledWith('bounty.id', 'DESC');
+    });
+
+    it('activeMilestones and milestoneProgress pass a stable order to find()', async () => {
+      await service.activeMilestones('sponsor-1', { limit: 10, offset: 10 });
+      await service.milestoneProgress('sponsor-1', { limit: 10, offset: 10 });
+
+      for (const [args] of milestoneRepo.find.mock.calls) {
+        expect(args).toMatchObject({
+          order: { createdAt: 'DESC', id: 'DESC' },
+          take: 10,
+          skip: 10,
+        });
+      }
+      expect(milestoneRepo.find).toHaveBeenCalledTimes(2);
     });
   });
 });
