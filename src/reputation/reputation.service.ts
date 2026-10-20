@@ -33,6 +33,21 @@ export class ReputationService {
       this.paymentRepo,
     );
 
+    const latest = await this.getLatest(userId);
+    if (
+      latest &&
+      latest.totalEarnings === stats.lifetimeEarnings.toFixed(7) &&
+      latest.mergedPrCount === stats.mergedCount &&
+      latest.openBountiesClaimed === stats.openBountiesClaimed &&
+      latest.completionRate === stats.completionRate.toFixed(2) &&
+      latest.avgReviewTimeHours === stats.avgReviewTimeHours.toFixed(2) &&
+      latest.onTimeDeliveryPercentage === stats.onTimeDeliveryPercentage.toFixed(2) &&
+      JSON.stringify(latest.languages) === JSON.stringify(stats.languages) &&
+      JSON.stringify(latest.orgsContributedTo) === JSON.stringify(stats.orgs)
+    ) {
+      return latest;
+    }
+
     const snapshot = this.snapshotRepo.create({
       userId,
       totalEarnings: stats.lifetimeEarnings.toFixed(7),
