@@ -143,4 +143,19 @@ export class MilestonesController {
   allocateBudget(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.milestonesService.allocateBudget(id);
   }
+
+  @ApiOperation({ summary: 'Close a milestone and refund unspent budget' })
+  @ApiBearerAuth()
+  @ApiStandardErrorResponses()
+  @Idempotent('milestone.close')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.SPONSOR, UserRole.MAINTAINER)
+  @Post(':id/close')
+  close(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    const userId = (req.user as any)?.userId;
+    return this.milestonesService.close(id, userId);
+  }
 }

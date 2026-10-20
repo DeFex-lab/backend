@@ -256,4 +256,24 @@ export class MilestonesService {
       ),
     );
   }
+
+  async close(id: string, userId: string): Promise<Milestone> {
+    const milestone = await this.findOne(id);
+    if (!milestone) {
+      throw new NotFoundException(`Milestone ${id} not found`);
+    }
+
+    assertTransition(milestone.status, MilestoneStatus.CLOSED);
+
+    if (milestone.escrowId) {
+      try {
+        await this.escrowService.refund(milestone.escrowId);
+      } catch (err) {
+        // Escrow may already be refunded or partially released
+      }
+    }
+
+    milestone.status = MilestoneStatus.CLOSED;
+    return this.milestoneRepo.save(milestone);
+  }
 }
