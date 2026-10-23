@@ -4,6 +4,11 @@ import {
   ValidationOptions,
 } from 'class-validator';
 
+/**
+ * Validates that a value is a string representing a date strictly in the future.
+ * The decorated property is expected to be a string; non-strings are rejected.
+ */
+
 export function IsFutureDate(validationOptions?: ValidationOptions) {
   return function (object: object, propertyName: string) {
     registerDecorator({
